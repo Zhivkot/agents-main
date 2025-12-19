@@ -29,14 +29,9 @@ uv run pytest
 ## Customization
 
 - **Agent behavior**: Edit `src/main.py`
-- **MCP tools**: Add tools in `mcp/lambda/handler.py` and update the tool schema in `../agentcore/resource.ts`
+- **MCP tools**: Add tools in `mcp/lambda/handler.py` and update the tool schema in `../../agentcore/resource.ts`
 - **Model**: Configure in `src/model/load.py`
 
 ## Deployment
 
-This agent is deployed automatically when running `npx ampx sandbox` from the project root. The Amplify CDK construct in `amplify/custom/agentcore/resource.ts` handles:
-
-- Building the Docker image
-- Creating the AgentCore Runtime
-- Setting up the MCP Gateway
-- Configuring AgentCore Memory
+This agent is deployed automatically when running `npx ampx sandbox` from the project root. The Amplify CDK construct handles building the Docker image and creating all AgentCore resources.
