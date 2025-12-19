@@ -1,20 +1,87 @@
-## AWS Amplify React+Vite Starter Template
+# AgentCore Chat Application
 
-This repository provides a starter template for creating applications using React+Vite and AWS Amplify, emphasizing easy setup for authentication, API, and database capabilities.
+A full-stack AI chat application built with AWS Amplify and Amazon Bedrock AgentCore. Features real-time streaming responses via WebSocket, conversation memory, and MCP (Model Context Protocol) gateway integration.
 
-## Overview
+## Architecture
 
-This template equips you with a foundational React application integrated with AWS Amplify, streamlined for scalability and performance. It is ideal for developers looking to jumpstart their project with pre-configured AWS services like Cognito, AppSync, and DynamoDB.
+- **Frontend**: React + Vite with real-time WebSocket chat interface
+- **Backend**: AWS Amplify Gen 2 with custom CDK constructs
+- **AI Runtime**: Amazon Bedrock AgentCore with Strands Agent SDK
+- **Auth**: Amazon Cognito for user authentication
+- **Streaming**: WebSocket API Gateway for real-time responses
+- **Memory**: AgentCore Memory for conversation persistence
 
-## Features
+## Prerequisites
 
-- **Authentication**: Setup with Amazon Cognito for secure user authentication.
-- **API**: Ready-to-use GraphQL endpoint with AWS AppSync.
-- **Database**: Real-time database powered by Amazon DynamoDB.
+- Node.js 18+
+- Python 3.12+
+- AWS CLI configured with appropriate credentials
+- [uv](https://docs.astral.sh/uv/) (Python package manager)
 
-## Deploying to AWS
+## Quick Start
 
-For detailed instructions on deploying your application, refer to the [deployment section](https://docs.amplify.aws/react/start/quickstart/#deploy-a-fullstack-app-to-aws) of our documentation.
+1. **Install dependencies**
+   ```bash
+   npm install
+   cd amplify && npm install && cd ..
+   ```
+
+2. **Deploy to AWS sandbox**
+   ```bash
+   npx ampx sandbox
+   ```
+
+3. **Start the development server**
+   ```bash
+   npm run dev
+   ```
+
+## Project Structure
+
+```
+├── amplify/
+│   ├── auth/                    # Cognito authentication
+│   ├── data/                    # GraphQL API schema
+│   ├── functions/               # Lambda functions
+│   │   ├── invokeAgent/         # GraphQL resolver for agent
+│   │   └── websocket/           # WebSocket handlers
+│   ├── custom/
+│   │   ├── agentcore/           # AgentCore CDK construct
+│   │   ├── agents/neoAmber/     # Strands agent implementation
+│   │   └── websocket/           # WebSocket API CDK construct
+│   └── backend.ts               # Main backend definition
+├── src/
+│   ├── components/
+│   │   ├── AgentChat.tsx        # Chat interface component
+│   │   └── MessageContent.tsx   # Message rendering
+│   └── App.tsx                  # Main application
+└── package.json
+```
+
+## Agent Configuration
+
+The agent is located in `amplify/custom/agents/neoAmber/` and uses the Strands Agent SDK. To customize:
+
+1. Edit `src/main.py` to modify agent behavior
+2. Add MCP tools in `mcp/lambda/handler.py`
+3. Update `pyproject.toml` for Python dependencies
+
+## Environment Variables
+
+Copy `.env.example` to `.env` for local development. Lambda functions receive environment variables automatically from CDK during deployment.
+
+## Deployment
+
+### Sandbox (Development)
+```bash
+npx ampx sandbox
+```
+
+### Production
+Deploy via AWS Amplify Console or:
+```bash
+npx ampx pipeline-deploy --branch main
+```
 
 ## Security
 
