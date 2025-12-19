@@ -72,15 +72,9 @@ Copy `.env.example` to `.env` for local development. Lambda functions receive en
 
 ## Deployment
 
-### Sandbox (Development)
+### Sandbox 
 ```bash
 npx ampx sandbox
-```
-
-### Production
-Deploy via AWS Amplify Console or:
-```bash
-npx ampx pipeline-deploy --branch main
 ```
 
 
