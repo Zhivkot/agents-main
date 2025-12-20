@@ -12,19 +12,73 @@ import type { APIGatewayProxyHandler } from 'aws-lambda';
 const region = process.env.AWS_REGION || 'eu-central-1';
 const ssmClient = new SSMClient({ region });
 
-let cachedRuntimeId: string | null = null;
+/**
+ * WebSocket message interface with optional agent selection
+ */
+interface WebSocketMessage {
+  action: string;
+  message: string;
+  sessionId: string;
+  userId?: string;
+  /** Target agent name - if not specified, uses default agent */
+  agentName?: string;
+}
 
-async function getAgentRuntimeId(): Promise<string> {
-  if (cachedRuntimeId) return cachedRuntimeId;
+// Cache for agent runtime IDs (keyed by agent name)
+const runtimeIdCache: Map<string, string> = new Map();
 
-  const paramName = process.env.AGENT_RUNTIME_ID_PARAM;
-  if (!paramName) throw new Error('AGENT_RUNTIME_ID_PARAM not configured');
+/**
+ * Get the SSM parameter name for a specific agent's runtime ID
+ */
+function getAgentParamName(agentName: string): string {
+  const pattern = process.env.AGENT_RUNTIME_ID_PARAM_PATTERN;
+  if (pattern) {
+    return pattern.replace('{agentName}', agentName);
+  }
+  // Fallback to legacy single-agent param
+  return process.env.AGENT_RUNTIME_ID_PARAM || '';
+}
 
-  const response = await ssmClient.send(new GetParameterCommand({ Name: paramName }));
-  if (!response.Parameter?.Value) throw new Error('Agent runtime ID not found in SSM');
+/**
+ * Get the default agent name from environment
+ */
+function getDefaultAgentName(): string {
+  return process.env.DEFAULT_AGENT_NAME || 'neoAmber';
+}
 
-  cachedRuntimeId = response.Parameter.Value;
-  return cachedRuntimeId;
+/**
+ * Get the runtime ID for a specific agent by looking up its SSM parameter.
+ * Results are cached to avoid repeated SSM calls.
+ * 
+ * @param agentName - The name of the agent to look up
+ * @returns The runtime ID for the agent
+ * @throws Error if the SSM parameter is not found or not configured
+ */
+async function getAgentRuntimeId(agentName: string): Promise<string> {
+  // Check cache first
+  const cached = runtimeIdCache.get(agentName);
+  if (cached) return cached;
+
+  const paramName = getAgentParamName(agentName);
+  if (!paramName) {
+    throw new Error(`Agent runtime ID parameter not configured for agent: ${agentName}`);
+  }
+
+  try {
+    const response = await ssmClient.send(new GetParameterCommand({ Name: paramName }));
+    if (!response.Parameter?.Value) {
+      throw new Error(`Agent runtime ID not found in SSM for agent: ${agentName}`);
+    }
+
+    // Cache the result
+    runtimeIdCache.set(agentName, response.Parameter.Value);
+    return response.Parameter.Value;
+  } catch (error) {
+    if (error instanceof Error && error.name === 'ParameterNotFound') {
+      throw new Error(`Agent '${agentName}' not found. SSM parameter '${paramName}' does not exist.`);
+    }
+    throw error;
+  }
 }
 
 async function sendToClient(
@@ -49,7 +103,7 @@ export const handler: APIGatewayProxyHandler = async (event) => {
     region,
   });
 
-  let body: { message: string; sessionId: string; userId?: string };
+  let body: WebSocketMessage;
   try {
     body = JSON.parse(event.body || '{}');
   } catch {
@@ -57,16 +111,19 @@ export const handler: APIGatewayProxyHandler = async (event) => {
     return { statusCode: 400, body: 'Invalid JSON' };
   }
 
-  const { message, sessionId, userId } = body;
+  const { message, sessionId, userId, agentName } = body;
   if (!message) {
     await sendToClient(apiClient, connectionId, { type: 'error', error: 'Message required' });
     return { statusCode: 400, body: 'Message required' };
   }
 
-  console.log(`Processing message for session ${sessionId}, user ${userId}: ${message.substring(0, 100)}...`);
+  // Determine which agent to use - fall back to default if not specified
+  const targetAgent = agentName || getDefaultAgentName();
+
+  console.log(`Processing message for agent '${targetAgent}', session ${sessionId}, user ${userId}: ${message.substring(0, 100)}...`);
 
   try {
-    const runtimeId = await getAgentRuntimeId();
+    const runtimeId = await getAgentRuntimeId(targetAgent);
     const accountId = process.env.AWS_ACCOUNT_ID;
     if (!accountId) throw new Error('AWS_ACCOUNT_ID environment variable not configured');
 
@@ -97,8 +154,12 @@ export const handler: APIGatewayProxyHandler = async (event) => {
 
     const signedRequest = await signer.sign(request);
 
-    // Send "thinking" status
-    await sendToClient(apiClient, connectionId, { type: 'status', status: 'thinking' });
+    // Send "thinking" status with agent info
+    await sendToClient(apiClient, connectionId, { 
+      type: 'status', 
+      status: 'thinking',
+      agentName: targetAgent,
+    });
 
     const response = await fetch(`https://${host}${path}`, {
       method: 'POST',
@@ -113,6 +174,7 @@ export const handler: APIGatewayProxyHandler = async (event) => {
         type: 'error',
         error: `AgentCore error: ${response.status}`,
         sessionId,
+        agentName: targetAgent,
       });
       return { statusCode: 200, body: 'Error sent' };
     }
@@ -158,6 +220,7 @@ export const handler: APIGatewayProxyHandler = async (event) => {
             type: 'chunk',
             chunk: chunkText,
             sessionId,
+            agentName: targetAgent,
           });
         }
       }
@@ -167,6 +230,7 @@ export const handler: APIGatewayProxyHandler = async (event) => {
           type: 'error',
           error: errorMessage,
           sessionId,
+          agentName: targetAgent,
         });
         return { statusCode: 200, body: 'Error sent' };
       }
@@ -175,12 +239,14 @@ export const handler: APIGatewayProxyHandler = async (event) => {
         type: 'complete',
         response: fullResponse,
         sessionId,
+        agentName: targetAgent,
       });
     } else {
       await sendToClient(apiClient, connectionId, {
         type: 'complete',
         response: responseText,
         sessionId,
+        agentName: targetAgent,
       });
     }
 
@@ -191,6 +257,7 @@ export const handler: APIGatewayProxyHandler = async (event) => {
       type: 'error',
       error: error instanceof Error ? error.message : 'Unknown error',
       sessionId,
+      agentName: agentName || getDefaultAgentName(),
     });
     return { statusCode: 200, body: 'Error sent' };
   }

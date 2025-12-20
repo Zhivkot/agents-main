@@ -12,7 +12,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export interface WebSocketApiProps {
+  /** SSM parameter name for the default agent's runtime ID (for backward compatibility) */
   runtimeIdParamName: string;
+  /** Default agent name to use when no agent is specified in the request */
+  defaultAgentName: string;
 }
 
 export class WebSocketApiResource extends Construct {
@@ -89,6 +92,11 @@ export class WebSocketApiResource extends Construct {
       timeout: cdk.Duration.minutes(5), // 5 min timeout for long agent responses
       memorySize: 512,
       environment: {
+        // Pattern for looking up agent runtime IDs by name
+        AGENT_RUNTIME_ID_PARAM_PATTERN: '/amplify/agentcore/{agentName}/runtimeId',
+        // Default agent name for backward compatibility
+        DEFAULT_AGENT_NAME: props.defaultAgentName,
+        // Legacy: single agent param name (for backward compatibility)
         AGENT_RUNTIME_ID_PARAM: props.runtimeIdParamName,
         AWS_ACCOUNT_ID: accountId,
       },

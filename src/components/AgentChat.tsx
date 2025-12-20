@@ -1,14 +1,27 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import outputs from '../../amplify_outputs.json';
 import { MessageContent } from './MessageContent';
+
+interface AgentInfo {
+  runtimeId: string;
+  runtimeArn: string;
+  description?: string;
+  isDefault?: boolean;
+}
 
 interface AmplifyOutputs {
   custom?: {
     webSocketUrl?: string;
+    // Multi-agent support
+    agents?: Record<string, AgentInfo>;
+    defaultAgent?: string;
+    sharedGatewayUrl?: string;
+    sharedMemoryId?: string;
+    agentCoreRegion?: string;
+    // Legacy single-agent fields (backward compatibility)
     agentCoreRuntimeId?: string;
     agentCoreRuntimeArn?: string;
     agentCoreGatewayUrl?: string;
-    agentCoreRegion?: string;
   };
 }
 
@@ -41,8 +54,42 @@ export function AgentChat({ userId }: AgentChatProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const [sessionId] = useState(() => crypto.randomUUID());
-  
   const [thinkingStatus, setThinkingStatus] = useState<string | null>(null);
+  
+  // Get available agents from amplify_outputs.json
+  const availableAgents = useMemo(() => {
+    const agents = typedOutputs.custom?.agents;
+    if (agents && Object.keys(agents).length > 0) {
+      return Object.entries(agents).map(([name, info]) => ({
+        name,
+        description: info.description,
+        isDefault: info.isDefault,
+      }));
+    }
+    // Fallback for legacy single-agent config
+    if (typedOutputs.custom?.agentCoreRuntimeId) {
+      return [{ name: 'default', description: 'Default Agent', isDefault: true }];
+    }
+    return [];
+  }, []);
+
+  // Get default agent name
+  const defaultAgentName = useMemo(() => {
+    // First check explicit defaultAgent field
+    if (typedOutputs.custom?.defaultAgent) {
+      return typedOutputs.custom.defaultAgent;
+    }
+    // Then check for agent marked as default
+    const defaultAgent = availableAgents.find(a => a.isDefault);
+    if (defaultAgent) {
+      return defaultAgent.name;
+    }
+    // Fall back to first agent
+    return availableAgents[0]?.name || 'default';
+  }, [availableAgents]);
+
+  // Selected agent state
+  const [selectedAgent, setSelectedAgent] = useState<string>(defaultAgentName);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -74,35 +121,29 @@ export function AgentChat({ userId }: AgentChatProps) {
 
         switch (data.type) {
           case 'status':
-            // Show thinking status
             setThinkingStatus(data.status === 'thinking' ? 'Thinking...' : data.status || null);
             break;
 
           case 'chunk': {
-            // Clear thinking status when chunks start arriving
             setThinkingStatus(null);
             
             const messageId = currentMessageIdRef.current;
             let chunk = data.chunk;
             
-            // Ensure chunk is a string
             if (chunk && typeof chunk !== 'string') {
               chunk = JSON.stringify(chunk);
             }
             
-            // Streaming chunk - append to current message or create it
             if (messageId && chunk) {
               setMessages((prev) => {
                 const existingMsg = prev.find((msg) => msg.id === messageId);
                 if (existingMsg) {
-                  // Append to existing message
                   return prev.map((msg) =>
                     msg.id === messageId
                       ? { ...msg, content: msg.content + chunk, isStreaming: true }
                       : msg
                   );
                 } else {
-                  // Create new assistant message on first chunk
                   return [...prev, {
                     id: messageId,
                     role: 'assistant' as const,
@@ -117,7 +158,6 @@ export function AgentChat({ userId }: AgentChatProps) {
           }
 
           case 'complete': {
-            // Response complete - clear status and stop streaming
             setThinkingStatus(null);
             const messageId = currentMessageIdRef.current;
             if (messageId) {
@@ -135,7 +175,6 @@ export function AgentChat({ userId }: AgentChatProps) {
           }
 
           case 'error': {
-            // Error occurred
             setThinkingStatus(null);
             const messageId = currentMessageIdRef.current;
             if (messageId) {
@@ -162,7 +201,6 @@ export function AgentChat({ userId }: AgentChatProps) {
       setConnectionStatus('disconnected');
       wsRef.current = null;
       
-      // Auto-reconnect after 3 seconds
       setTimeout(() => {
         if (!wsRef.current) {
           connectWebSocket();
@@ -195,7 +233,6 @@ export function AgentChat({ userId }: AgentChatProps) {
 
     setIsLoading(true);
 
-    // Add user message
     const userMsg: Message = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -204,17 +241,15 @@ export function AgentChat({ userId }: AgentChatProps) {
     };
 
     setMessages((prev) => [...prev, userMsg]);
-
-    // Prepare assistant message ID but don't add to messages yet
-    // It will be added when the first chunk arrives
     currentMessageIdRef.current = crypto.randomUUID();
 
-    // Send message via WebSocket - agent handles memory/context internally
+    // Send message via WebSocket with agentName for multi-agent routing
     wsRef.current.send(JSON.stringify({
       action: 'sendMessage',
       message: userMessage,
       sessionId,
       userId,
+      agentName: selectedAgent,
     }));
   };
 
@@ -226,18 +261,60 @@ export function AgentChat({ userId }: AgentChatProps) {
     setInput('');
   };
 
+  const handleAgentChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSelectedAgent(e.target.value);
+  };
+
+  // Get current agent info for display
+  const currentAgentInfo = useMemo(() => {
+    return availableAgents.find(a => a.name === selectedAgent);
+  }, [availableAgents, selectedAgent]);
+
   return (
     <div className="agent-chat">
-      <div className="connection-status">
-        <span className={`status-dot ${connectionStatus}`}></span>
-        {connectionStatus === 'connected' ? 'Connected' : 
-         connectionStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
+      <div className="chat-header">
+        <div className="connection-status">
+          <span className={`status-dot ${connectionStatus}`}></span>
+          {connectionStatus === 'connected' ? 'Connected' : 
+           connectionStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
+        </div>
+        
+        {availableAgents.length > 1 && (
+          <div className="agent-selector">
+            <label htmlFor="agent-select">Agent:</label>
+            <select
+              id="agent-select"
+              value={selectedAgent}
+              onChange={handleAgentChange}
+              disabled={isLoading}
+            >
+              {availableAgents.map((agent) => (
+                <option key={agent.name} value={agent.name}>
+                  {agent.name}{agent.isDefault ? ' (default)' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        
+        {availableAgents.length === 1 && (
+          <div className="current-agent">
+            <span className="agent-label">Agent:</span>
+            <span className="agent-name">{selectedAgent}</span>
+          </div>
+        )}
       </div>
+
+      {currentAgentInfo?.description && (
+        <div className="agent-description">
+          {currentAgentInfo.description}
+        </div>
+      )}
 
       <div className="chat-messages">
         {messages.length === 0 && (
           <div className="empty-state">
-            <p>Start a conversation with the AI agent</p>
+            <p>Start a conversation with {selectedAgent}</p>
           </div>
         )}
         {messages.map((msg) => (
@@ -268,7 +345,7 @@ export function AgentChat({ userId }: AgentChatProps) {
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Type your message..."
+          placeholder={`Message ${selectedAgent}...`}
           disabled={isLoading || connectionStatus !== 'connected'}
         />
         <button type="submit" disabled={isLoading || !input.trim() || connectionStatus !== 'connected'}>

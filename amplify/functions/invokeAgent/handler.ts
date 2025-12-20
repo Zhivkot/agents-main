@@ -7,54 +7,97 @@ import { HttpRequest } from '@smithy/protocol-http';
 const region = process.env.AWS_REGION || 'eu-central-1';
 const ssmClient = new SSMClient({ region });
 
-// Cache the runtime ID
-let cachedRuntimeId: string | null = null;
+// Cache for agent runtime IDs (keyed by agent name)
+const runtimeIdCache: Map<string, string> = new Map();
 
-async function getAgentRuntimeId(): Promise<string> {
-  if (cachedRuntimeId) {
-    return cachedRuntimeId;
+/**
+ * Get the SSM parameter name for a specific agent's runtime ID
+ */
+function getAgentParamName(agentName: string): string {
+  const pattern = process.env.AGENT_RUNTIME_ID_PARAM_PATTERN;
+  if (pattern) {
+    return pattern.replace('{agentName}', agentName);
+  }
+  // Fallback to legacy single-agent param
+  return process.env.AGENT_RUNTIME_ID_PARAM || '';
+}
+
+/**
+ * Get the default agent name from environment
+ */
+function getDefaultAgentName(): string {
+  return process.env.DEFAULT_AGENT_NAME || 'neoAmber';
+}
+
+/**
+ * Get the runtime ID for a specific agent by looking up its SSM parameter.
+ * Results are cached to avoid repeated SSM calls.
+ * 
+ * @param agentName - The name of the agent to look up
+ * @returns The runtime ID for the agent
+ * @throws Error if the SSM parameter is not found or not configured
+ */
+async function getAgentRuntimeId(agentName: string): Promise<string> {
+  // Check cache first
+  const cached = runtimeIdCache.get(agentName);
+  if (cached) {
+    console.log(`Using cached runtime ID for agent '${agentName}':`, cached);
+    return cached;
   }
 
-  const paramName = process.env.AGENT_RUNTIME_ID_PARAM;
-  console.log('SSM Parameter name:', paramName);
+  const paramName = getAgentParamName(agentName);
+  console.log(`SSM Parameter name for agent '${agentName}':`, paramName);
 
   if (!paramName) {
-    throw new Error('AGENT_RUNTIME_ID_PARAM not configured');
+    throw new Error(`Agent runtime ID parameter not configured for agent: ${agentName}`);
   }
 
-  const response = await ssmClient.send(new GetParameterCommand({ Name: paramName }));
+  try {
+    const response = await ssmClient.send(new GetParameterCommand({ Name: paramName }));
+    if (!response.Parameter?.Value) {
+      throw new Error(`Agent runtime ID not found in SSM for agent: ${agentName}`);
+    }
 
-  if (!response.Parameter?.Value) {
-    throw new Error('Agent runtime ID not found in SSM');
+    // Cache the result
+    runtimeIdCache.set(agentName, response.Parameter.Value);
+    console.log(`Retrieved Agent Runtime ID for '${agentName}':`, response.Parameter.Value);
+    return response.Parameter.Value;
+  } catch (error) {
+    if (error instanceof Error && error.name === 'ParameterNotFound') {
+      throw new Error(`Agent '${agentName}' not found. SSM parameter '${paramName}' does not exist.`);
+    }
+    throw error;
   }
-
-  cachedRuntimeId = response.Parameter.Value;
-  console.log('Retrieved Agent Runtime ID:', cachedRuntimeId);
-
-  return cachedRuntimeId;
 }
 
 interface InvokeAgentEvent {
   arguments: {
     message: string;
     sessionId: string;
+    /** Target agent name - if not specified, uses default agent */
+    agentName?: string;
   };
 }
 
 export const handler = async (event: InvokeAgentEvent) => {
   console.log('Event received:', JSON.stringify(event, null, 2));
 
-  const { message, sessionId } = event.arguments;
+  const { message, sessionId, agentName } = event.arguments;
+
+  // Determine which agent to use - fall back to default if not specified
+  const targetAgent = agentName || getDefaultAgentName();
+  console.log(`Processing request for agent '${targetAgent}', session ${sessionId}`);
 
   let runtimeId: string;
   try {
-    runtimeId = await getAgentRuntimeId();
+    runtimeId = await getAgentRuntimeId(targetAgent);
   } catch (error) {
-    console.error('Failed to get runtime ID:', error);
+    console.error(`Failed to get runtime ID for agent '${targetAgent}':`, error);
     return {
       success: false,
-      error: `Failed to get runtime ID: ${error instanceof Error ? error.message : 'Unknown'}`,
+      error: `Failed to get runtime ID for agent '${targetAgent}': ${error instanceof Error ? error.message : 'Unknown'}`,
       sessionId,
+      agentName: targetAgent,
     };
   }
 
@@ -156,6 +199,7 @@ export const handler = async (event: InvokeAgentEvent) => {
           success: true,
           response: fullResponse,
           sessionId,
+          agentName: targetAgent,
         };
       }
 
@@ -170,6 +214,7 @@ export const handler = async (event: InvokeAgentEvent) => {
         success: false,
         error: `AgentCore error (${path}): ${response.status} - ${responseText}`,
         sessionId,
+        agentName: targetAgent,
       };
     } catch (err) {
       console.error(`Exception for ${path}:`, err);
@@ -181,5 +226,6 @@ export const handler = async (event: InvokeAgentEvent) => {
     success: false,
     error: `All API paths failed. The AgentCore Runtime API endpoint format may have changed. Check CloudWatch logs for details.`,
     sessionId,
+    agentName: targetAgent,
   };
 };

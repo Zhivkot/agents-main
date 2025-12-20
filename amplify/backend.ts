@@ -2,48 +2,48 @@ import { defineBackend } from '@aws-amplify/backend';
 import { auth } from './auth/resource';
 import { data } from './data/resource';
 import { invokeAgent } from './functions/invokeAgent/resource';
-import { AgentCoreResource } from './custom/agentcore/resource';
+import { AgentRegistry } from './custom/agentcore/AgentRegistry';
+import { agentConfig } from './custom/agentcore/agents.config';
 import { WebSocketApiResource } from './custom/websocket/resource';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import * as ssm from 'aws-cdk-lib/aws-ssm';
 
 const backend = defineBackend({
   auth,
   data,
   invokeAgent,
 });
-//
+
 const stack = backend.createStack('AgentCoreStack');
 
-// Add AgentCore custom resources using Amplify's auth
-const agentCore = new AgentCoreResource(stack, 'AgentCore', {
+// Create AgentRegistry with all configured agents
+const agentRegistry = new AgentRegistry(stack, 'AgentRegistry', {
   appName: 'neoAmber',
   userPool: backend.auth.resources.userPool,
   authenticatedRole: backend.auth.resources.authenticatedUserIamRole,
-});
-
-// Store runtime ID in SSM Parameter to break circular dependency
-const runtimeIdParam = new ssm.StringParameter(stack, 'AgentRuntimeIdParam', {
-  parameterName: '/amplify/agentcore/runtimeId',
-  stringValue: agentCore.agentCoreRuntime.attrAgentRuntimeId,
+  config: agentConfig,
 });
 
 // Add WebSocket API for streaming responses
+// Use default agent's SSM parameter path for backward compatibility
 const webSocketApi = new WebSocketApiResource(stack, 'WebSocketApi', {
-  runtimeIdParamName: '/amplify/agentcore/runtimeId',
+  runtimeIdParamName: `/amplify/agentcore/${agentRegistry.defaultAgentName}/runtimeId`,
+  defaultAgentName: agentRegistry.defaultAgentName,
 });
 
-// Grant Lambda permission to read SSM parameter and invoke AgentCore
+// Grant Lambda permission to read SSM parameters and invoke AgentCore
 const invokeAgentFn = backend.invokeAgent.resources.lambda;
 const invokeAgentCfn = invokeAgentFn.node.defaultChild as cdk.aws_lambda.CfnFunction;
 
-// Add SSM parameter name and account ID as env vars
+// Add SSM parameter pattern and account ID as env vars for multi-agent support
 const existingEnv = (invokeAgentCfn.environment as { variables?: Record<string, string> })?.variables || {};
 invokeAgentCfn.environment = {
   variables: {
     ...existingEnv,
-    AGENT_RUNTIME_ID_PARAM: '/amplify/agentcore/runtimeId',
+    // Pattern for looking up agent runtime IDs by name
+    AGENT_RUNTIME_ID_PARAM_PATTERN: '/amplify/agentcore/{agentName}/runtimeId',
+    // Default agent name for backward compatibility
+    DEFAULT_AGENT_NAME: agentRegistry.defaultAgentName,
     AWS_ACCOUNT_ID: cdk.Stack.of(stack).account,
   },
 };
@@ -69,13 +69,37 @@ new iam.Policy(functionStack, 'InvokeAgentPermissions', {
   ],
 });
 
-// Output AgentCore values to amplify_outputs.json
+// Build agents output object with all deployed agents
+const agentsOutput: Record<string, {
+  runtimeId: string;
+  runtimeArn: string;
+  description?: string;
+  isDefault?: boolean;
+}> = {};
+
+for (const agentDef of agentConfig.agents) {
+  const agentResources = agentRegistry.getAgent(agentDef.name);
+  if (agentResources) {
+    agentsOutput[agentDef.name] = {
+      runtimeId: agentResources.runtime.attrAgentRuntimeId,
+      runtimeArn: agentResources.runtime.attrAgentRuntimeArn,
+      description: agentDef.description,
+      isDefault: agentDef.isDefault,
+    };
+  }
+}
+
+// Output AgentCore values to amplify_outputs.json with multi-agent support
 backend.addOutput({
   custom: {
-    agentCoreRuntimeId: agentCore.agentCoreRuntime.attrAgentRuntimeId,
-    agentCoreRuntimeArn: agentCore.agentCoreRuntime.attrAgentRuntimeArn,
-    agentCoreGatewayUrl: agentCore.agentCoreGateway.attrGatewayUrl,
-    agentCoreMemoryId: agentCore.agentCoreMemory.attrMemoryId,
+    // Multi-agent support: all agents with their details
+    agents: agentsOutput,
+    // Default agent name for backward compatibility
+    defaultAgent: agentRegistry.defaultAgentName,
+    // Shared resources (if configured)
+    sharedGatewayUrl: agentRegistry.sharedGateway?.attrGatewayUrl,
+    sharedMemoryId: agentRegistry.sharedMemory?.attrMemoryId,
+    // Region and WebSocket URL
     agentCoreRegion: cdk.Stack.of(stack).region,
     webSocketUrl: webSocketApi.webSocketUrl,
   },
