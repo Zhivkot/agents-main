@@ -38,21 +38,22 @@ export interface AgentRegistryConfig {
 export const agentConfig: AgentRegistryConfig = {
   agents: [
     {
-      name: 'neoAmber',
-      folderPath: '../agents/neoAmber',
-      description: 'React development assistant',
-    },
-    {
-      name: 'newAgent',
-      folderPath: '../agents/newAgent',
-      description: 'UX/UI design specialist for user experience and interface design',
-    },
-    {
       name: 'generalPurpose',
       folderPath: '../agents/generalPurpose',
       description: 'Versatile AI assistant for research, analysis, writing, and general problem-solving',
       isDefault: true,
     }
+    // Temporarily disabled to reduce M2M token costs
+    // {
+    //   name: 'neoAmber',
+    //   folderPath: '../agents/neoAmber',
+    //   description: 'React development assistant',
+    // },
+    // {
+    //   name: 'newAgent',
+    //   folderPath: '../agents/newAgent',
+    //   description: 'UX/UI design specialist for user experience and interface design',
+    // },
   ],
   sharedGateway: true,
   sharedMemory: true,
