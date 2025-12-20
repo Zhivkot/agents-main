@@ -37,18 +37,19 @@ export interface AgentRegistryConfig {
  */
 export const agentConfig: AgentRegistryConfig = {
   agents: [
-    {
-      name: 'generalPurpose',
-      folderPath: '../agents/generalPurpose',
-      description: 'Versatile AI assistant for research, analysis, writing, and general problem-solving',
-      isDefault: true,
-    }
-    // Temporarily disabled to reduce M2M token costs
     // {
-    //   name: 'neoAmber',
-    //   folderPath: '../agents/neoAmber',
-    //   description: 'React development assistant',
-    // },
+    //   name: 'generalPurpose',
+    //   folderPath: '../agents/generalPurpose',
+    //   description: 'Versatile AI assistant for research, analysis, writing, and general problem-solving',
+
+    // }
+    // Temporarily disabled to reduce M2M token costs
+    {
+      name: 'neoAmber',
+      folderPath: '../agents/neoAmber',
+      description: 'React development assistant',
+      isDefault: true,
+    },
     // {
     //   name: 'newAgent',
     //   folderPath: '../agents/newAgent',
